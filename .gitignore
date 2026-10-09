@@ -1,0 +1,35 @@
+node_modules/
+dist/
+.tools/
+*.local
+android/.gradle/
+android/local.properties
+android/**/build/
+# Retired Capacitor output left in existing workspaces.
+android/
+test-results/
+playwright-report/
+*.tsbuildinfo
+
+# Kotlin Multiplatform and Xcode local state.
+.gradle/
+.kotlin/
+**/build/
+local.properties
+**/DerivedData/
+**/xcuserdata/
+*.xcuserstate
+*.ipa
+*.xcarchive/
+iosApp/VanguardEnergy.xcodeproj/
+
+# Local outputs and signing material; distribute APKs through GitHub Releases.
+releases/
+screenshots/*.png
+*.jks
+*.keystore
+*.p12
+*.pem
+.env
+.env.*
+!.env.example
