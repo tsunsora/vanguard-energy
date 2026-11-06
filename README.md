@@ -30,7 +30,7 @@ No account, ads, tracking, or network connection is required. The app bundles it
 
 ## Android
 
-Requires **Android 7.0 (API 24) or newer**. Version **1.0.0 (26)** retains the application ID `app.vanguard.energy`. Local release builds use the original private signing key, allowing an in-place update from earlier sideload releases. Release mode disables debugging and enables code/resource shrinking.
+Requires **Android 7.0 (API 24) or newer**. Version **1.1.0 (27)** retains the application ID `app.vanguard.energy`. Local release builds use the original private signing key, allowing an in-place update from earlier sideload releases. Release mode disables debugging and enables code/resource shrinking.
 
 On the first upgrade, a short-lived, invisible WebView imports validated player preferences from the old app's private local storage. It cannot access the network, files, or native bridges. Old game counts and retired fields are discarded. Fresh installs bypass this import entirely. If import fails, the app warns and retries on the next launch. Settings changes during a failed import apply only to the current game, preserving the old preferences for that retry.
 
