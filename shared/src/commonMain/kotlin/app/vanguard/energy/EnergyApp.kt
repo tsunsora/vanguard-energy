@@ -58,18 +58,19 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.abs
-import kotlin.random.Random
 
 private val Background = Color(0xff0b0d10)
-private val ZoneBase = Color(0xff101315)
-private val Surface = Color(0xff14181b)
-private val Field = Color(0xff101416)
-private val Line = Color(0xff262d30)
+private val ZoneBase = Color(0xff121417)
+private val Surface = Color(0xff1a1f23)
+private val Field = Color(0xff1e2327)
+private val Line = Color(0xff30383c)
 private val Ink = Color(0xffe8eee6)
 private val Muted = Color(0xff8f9b94)
 private val Lime = Color(0xffc9f76f)
 private val Warn = Color(0xffffb36b)
-private val Scrim = Color(0xa6050709)
+private val Scrim = Color(0xd9050709)
+/** Table chrome stops growing here so it can never outweigh the count; Setup still scales fully. */
+private const val TABLE_TEXT_SCALE = 1.3f
 private const val HOLD_MS = 600
 private val COLOR_NAMES = listOf("Lime", "Violet", "Coral", "Cyan", "Orange", "Sky blue")
 private fun playerColor(value: String) = Color(0xff000000 or value.removePrefix("#").toLong(16))
@@ -92,22 +93,6 @@ fun EnergyApp(session: TrackerSession) {
       CompositionLocalProvider(LocalContentColor provides Ink, LocalTextStyle provides typography.bodyMedium) {
         val haptics = LocalHapticFeedback.current
         val feel: Feel = { if (session.board.preferences.haptics) haptics.performHapticFeedback(it) }
-        // "Who goes first" cycles a highlight around the table and settles on a random seat.
-        var highlight by remember { mutableStateOf<Int?>(null) }
-        var picks by remember { mutableIntStateOf(0) }
-        LaunchedEffect(picks) {
-            if (picks == 0) return@LaunchedEffect
-            val count = session.board.preferences.count
-            val steps = count * 3 + Random.nextInt(count) + 1
-            var wait = 70.0
-            for (step in 0 until steps) {
-                highlight = step % count
-                if (step < steps - 1) { delay(wait.toLong()); wait *= 1.12 }
-            }
-            feel(HapticFeedbackType.Confirm)
-            delay(4_000)
-            highlight = null
-        }
         BoxWithConstraints(Modifier.fillMaxSize().background(Background).windowInsetsPadding(WindowInsets.safeDrawing).padding(6.dp)) {
             val board = session.board
             val overlay = session.menuOpen || session.setupOpen
@@ -119,14 +104,14 @@ fun EnergyApp(session: TrackerSession) {
                             val id = row * (board.preferences.count / 2) + column
                             key(id) {
                                 PlayerZone(board.player(id), board.rotated(id), board.preferences.count == 4 && (id == 0 || id == 3),
-                                    highlight == id, session.limitBumps[id], !overlay, session, digitFont, feel,
+                                    session.limitBumps[id], !overlay, session, digitFont, feel,
                                     Modifier.weight(1f).fillMaxHeight())
                             }
                         }
                     }
                 }
             }
-            if (session.menuOpen) Menu(session) { picks++ }
+            if (session.menuOpen) Menu(session)
             Hub(session.menuOpen, Modifier.align(Alignment.Center).then(if (session.setupOpen) Modifier.clearAndSetSemantics {} else Modifier)) {
                 session.showMenu(!session.menuOpen)
             }
@@ -142,7 +127,7 @@ fun EnergyApp(session: TrackerSession) {
 }
 
 @Composable
-private fun PlayerZone(player: Player, rotated: Boolean, nameOnRight: Boolean, highlighted: Boolean, bumps: Int,
+private fun PlayerZone(player: Player, rotated: Boolean, nameOnRight: Boolean, bumps: Int,
     interactive: Boolean, session: TrackerSession, digits: FontFamily, feel: Feel, modifier: Modifier) {
     val id = player.preference.id
     val name = player.preference.label
@@ -157,10 +142,12 @@ private fun PlayerZone(player: Player, rotated: Boolean, nameOnRight: Boolean, h
     var deltaSum by remember { mutableIntStateOf(0) }
     var deltaText by remember { mutableStateOf<String?>(null) }
     var deltaShown by remember { mutableIntStateOf(0) }
+    var limitNotice by remember { mutableStateOf(false) }
     LaunchedEffect(player.energy) {
         val change = player.energy - previous
         previous = player.energy
         if (change != 0) {
+            limitNotice = false
             deltaSum += change
             deltaText = when {
                 deltaSum > 0 -> "+$deltaSum"
@@ -176,7 +163,8 @@ private fun PlayerZone(player: Player, rotated: Boolean, nameOnRight: Boolean, h
         if (bumps == seenBumps) return@LaunchedEffect
         seenBumps = bumps
         deltaSum = 0
-        deltaText = "Max ${player.limit}"
+        deltaText = null
+        limitNotice = true
         deltaShown++
         shake.snapTo(0f)
         shake.animateTo(0f, keyframes { durationMillis = 320; 6f at 90; -5f at 180; 2f at 260 })
@@ -186,23 +174,27 @@ private fun PlayerZone(player: Player, rotated: Boolean, nameOnRight: Boolean, h
         delay(1_600)
         deltaText = null
         deltaSum = 0
+        limitNotice = false
     }
-    val deltaAlpha by animateFloatAsState(if (deltaText != null) .9f else 0f, tween(250), label = "delta")
 
     BoxWithConstraints(modifier.clip(shape)
-        .border(if (highlighted) 3.dp else 1.dp, if (highlighted) color else lerp(ZoneBase, color, .2f), shape)
+        .border(1.5.dp, color.copy(alpha = .32f), shape)
         .testTag("player-$id")) {
         val zoneWidth = maxWidth
         val zoneHeight = maxHeight
         // The dial sits slightly above centre, clear of the name and of the +3 button.
-        val dial = min(min(zoneWidth * .8f, zoneHeight * .58f), (zoneHeight * .53f - 64.dp) * 2).coerceAtLeast(48.dp)
-        val dialTop = zoneHeight * .47f - dial / 2
+        // Short zones bring the +/− marks closer to the dial, so it narrows to keep them clear.
+        val dialWidth = zoneWidth * if (zoneHeight < 360.dp) .88f else .92f
+        val dial = min(min(dialWidth, zoneHeight * .68f), (zoneHeight * .5f - 64.dp) * 2).coerceAtLeast(48.dp)
+        val dialTop = (zoneHeight - dial) / 2
         val density = LocalDensity.current
         fun Dp.sp() = with(density) { toSp() }
+        fun tableSp(value: Float) = (value * minOf(density.fontScale, TABLE_TEXT_SCALE) / density.fontScale).sp
         Box(Modifier.fillMaxSize().graphicsLayer { rotationZ = if (rotated) 180f else 0f }.drawBehind {
-            drawRect(lerp(ZoneBase, color, .07f))
-            drawRect(Brush.radialGradient(listOf(color.copy(alpha = .16f), Color.Transparent),
-                Offset(size.width / 2, size.height), size.height * .75f))
+            // A neutral base stays clean in dim rooms; the colour lives in a glow behind the count.
+            drawRect(lerp(ZoneBase, color, .08f))
+            drawRect(Brush.radialGradient(listOf(color.copy(alpha = .28f), color.copy(alpha = .1f), Color.Transparent),
+                center, maxOf(dial.toPx() * .72f, 1f)))
         }) {
             Column(Modifier.fillMaxSize()) {
                 EnergyHalf("Add 1 energy to $name", true, player.energy < player.limit, interactive, false, color,
@@ -216,87 +208,103 @@ private fun PlayerZone(player: Player, rotated: Boolean, nameOnRight: Boolean, h
             }
             Box(Modifier.align(Alignment.TopCenter).offset(y = dialTop).size(dial)
                 .offset { IntOffset(shake.value.dp.roundToPx(), 0) }) {
-                Canvas(Modifier.fillMaxSize()) { drawDial(player.energy, color, holdProgress) }
-                BasicText(deltaText ?: "", Modifier.align(Alignment.TopCenter).padding(top = dial * .13f)
-                    .graphicsLayer { alpha = deltaAlpha }.clearAndSetSemantics {},
-                    style = TextStyle(fontFamily = digits, fontWeight = FontWeight.SemiBold, fontSize = (dial * .13f).sp(),
-                        color = if (deltaSum < 0) Muted else Ink), maxLines = 1)
+                // A quick tap also starts the hold timer, so feedback waits until it is clearly a hold.
+                val drain = ((holdProgress - .15f) / .85f).coerceIn(0f, 1f)
+                Canvas(Modifier.fillMaxSize()) {
+                    drawDial(player.energy, color, drain)
+                    // Rotated seats face each other, so a lone 6 or 9 gets the dice-style dot ("6.")
+                    // at its baseline to say which way up it is.
+                    if (player.energy == 6 || player.energy == 9) {
+                        drawCircle(color, size.minDimension * .026f, Offset(size.width * .68f, size.height * .738f))
+                    }
+                }
+                // The slot above the number is empty at rest. The reset word goes here because it is on
+                // the far side of the zone from the holding thumb.
+                val full = player.limit == 10 && player.energy == 10
+                val notice = when {
+                    drain > .1f -> "RESET"
+                    limitNotice -> "MAX ${player.limit}"
+                    deltaText != null -> deltaText
+                    full -> "FULL"
+                    else -> null
+                }
+                if (notice != null) BasicText(notice, Modifier.align(Alignment.TopCenter).padding(top = dial * .065f).clearAndSetSemantics {},
+                    style = TextStyle(fontFamily = digits, fontWeight = FontWeight.SemiBold,
+                        fontSize = (dial * .125f).coerceAtLeast(16.dp).sp(), color = when {
+                            drain > .1f -> Ink
+                            limitNotice || (deltaText == null && full) -> color
+                            deltaSum < 0 -> lerp(Ink, color, .3f)
+                            else -> lerp(Ink, color, .5f)
+                        }), maxLines = 1)
                 val digitsShown = player.energy.toString().length
-                val numberSize = (dial * when (digitsShown) { 1 -> .56f; 2 -> .5f; 3 -> .36f; else -> .28f }).sp()
-                BasicText(player.energy.toString(), Modifier.align(Alignment.Center)
-                    .widthIn(max = dial * .8f).heightIn(max = dial * .58f).testTag("energy-$id")
-                    .graphicsLayer { alpha = if (holding) .35f else 1f }
-                    .clearAndSetSemantics { contentDescription = "$name: ${player.energy} energy"; liveRegion = LiveRegionMode.Polite },
+                val numberDp = dial * when (digitsShown) { 1 -> .74f; 2 -> .66f; 3 -> .48f; else -> .38f }
+                val numberSize = numberDp.sp()
+                // Laid out at the digit's visible height, so it sits between the two slots; only its
+                // empty line spacing overflows. Width alone decides how far long counts shrink.
+                // Digits sit below the middle of their text line, by an amount set by the font size.
+                BasicText(player.energy.toString(), Modifier.align(Alignment.Center).offset(y = -numberDp * .05f)
+                    .widthIn(max = dial * .8f).testTag("energy-$id")
+                    .clearAndSetSemantics { contentDescription = "$name: ${player.energy} energy"; liveRegion = LiveRegionMode.Polite }
+                    .height(numberDp * .72f).wrapContentHeight(unbounded = true),
                     style = TextStyle(fontFamily = digits, fontWeight = FontWeight.SemiBold, fontSize = numberSize,
                         color = color, textAlign = TextAlign.Center), maxLines = 1,
                     autoSize = TextAutoSize.StepBased(minFontSize = 1.sp, maxFontSize = numberSize, stepSize = .5.sp))
-                val cap = when {
-                    player.limit > 10 -> "No limit"
-                    player.energy == 10 -> "Full"
-                    else -> "of 10"
-                }
-                BasicText(cap.uppercase(), Modifier.align(Alignment.BottomCenter).padding(bottom = dial * .15f).clearAndSetSemantics {},
-                    style = TextStyle(fontFamily = MaterialTheme.typography.bodyMedium.fontFamily, fontSize = (dial * .07f).sp(),
-                        letterSpacing = (dial * .01f).sp(), color = lerp(Muted, color, .45f)), maxLines = 1)
             }
             Row(Modifier.align(if (nameOnRight) Alignment.TopEnd else Alignment.TopStart).padding(10.dp)
                 .widthIn(max = min(160.dp, (zoneWidth - 24.dp).coerceAtLeast(1.dp))).height(40.dp)
                 .consumeTouches().padding(6.dp), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Canvas(Modifier.size(9.dp)) { drawSeatMark(id, lerp(color, Ink, .2f)) }
-                BasicText(name, style = MaterialTheme.typography.bodyMedium.copy(color = lerp(color, Ink, .2f),
+                Canvas(Modifier.size(13.dp)) { drawSeatMark(id, lerp(color, Ink, .1f)) }
+                BasicText(name, style = MaterialTheme.typography.bodyMedium.copy(color = lerp(color, Ink, .1f),
                     fontWeight = FontWeight.SemiBold, lineHeight = TextUnit.Unspecified),
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    autoSize = TextAutoSize.StepBased(minFontSize = 1.sp, maxFontSize = if (zoneWidth <= 260.dp) 13.sp else 15.sp, stepSize = .5.sp))
+                    autoSize = TextAutoSize.StepBased(minFontSize = 12.sp, maxFontSize = tableSp(if (zoneWidth <= 260.dp) 15f else 17f), stepSize = .5.sp))
             }
-            if (highlighted) BasicText("GOES FIRST", Modifier.align(Alignment.BottomCenter).padding(bottom = 68.dp).height(24.dp)
-                .clip(CircleShape).background(color).padding(horizontal = 10.dp, vertical = 5.dp)
-                .semantics { liveRegion = LiveRegionMode.Polite; contentDescription = "$name goes first" },
-                style = MaterialTheme.typography.bodyMedium.copy(color = Background, fontWeight = FontWeight.SemiBold,
-                    letterSpacing = .8.sp, lineHeight = TextUnit.Unspecified),
-                maxLines = 1, autoSize = TextAutoSize.StepBased(minFontSize = 1.sp, maxFontSize = 11.sp, stepSize = .5.sp))
             val canCharge = player.energy < player.limit
             Row(Modifier.align(Alignment.BottomCenter).padding(bottom = 12.dp).height(48.dp)
                 .widthIn(min = min(116.dp, (zoneWidth - 32.dp).coerceAtLeast(1.dp)), max = (zoneWidth - 32.dp).coerceAtLeast(1.dp))
-                .clip(CircleShape).background(lerp(ZoneBase, color, .14f))
-                .border(1.dp, color.copy(alpha = if (canCharge) .35f else .12f), CircleShape)
+                // Maxed out: an empty outline, still legible, so it reads as off rather than missing.
+                .clip(CircleShape).then(if (canCharge) Modifier.background(lerp(ZoneBase, color, .24f)) else Modifier)
+                .border(1.5.dp, color.copy(alpha = if (canCharge) .6f else .4f), CircleShape)
                 .testTag("charge-$id").clickable(enabled = canCharge && interactive, role = Role.Button) {
                     if (session.adjust(id, 3)) feel(HapticFeedbackType.Confirm)
                 }
                 .semantics { contentDescription = "Charge +3 for $name"; if (!canCharge) disabled() }
                 .padding(horizontal = 16.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-                val tint = color.copy(alpha = if (canCharge) 1f else .3f)
-                Canvas(Modifier.size(14.dp)) { drawBolt(tint) }
+                val tint = color.copy(alpha = if (canCharge) 1f else .7f)
+                Canvas(Modifier.size(18.dp)) { drawBolt(tint) }
                 Spacer(Modifier.width(6.dp))
                 BasicText("+3", style = MaterialTheme.typography.bodyLarge.copy(color = tint, fontWeight = FontWeight.SemiBold,
                     lineHeight = TextUnit.Unspecified), maxLines = 1,
-                    autoSize = TextAutoSize.StepBased(minFontSize = 1.sp, maxFontSize = 17.sp, stepSize = .5.sp))
+                    autoSize = TextAutoSize.StepBased(minFontSize = 1.sp, maxFontSize = tableSp(18f), stepSize = .5.sp))
             }
         }
     }
 }
 
-/** Ten arc segments, one per point of energy, echoing the broken ring of the app icon. */
-private fun DrawScope.drawDial(energy: Int, color: Color, holdProgress: Float) {
-    val stroke = size.minDimension * .055f
+/**
+ * Ten square-cut energy cells, one per point, with a wider break after every five so a count reads
+ * without counting. Holding to reset drains the lit cells, so the ring itself is the progress bar.
+ */
+private fun DrawScope.drawDial(energy: Int, color: Color, drain: Float) {
+    val stroke = size.minDimension * .045f
     val radius = size.minDimension / 2 - stroke / 2
     val topLeft = Offset(center.x - radius, center.y - radius)
     val arcSize = Size(radius * 2, radius * 2)
-    val gap = 12.5f
-    val off = lerp(Color(0xff22292b), color, .14f)
+    val gap = 6f
+    val halfGap = 9f
+    val cell = (180f - halfGap) / 5
+    val off = lerp(Color(0xff2a3134), color, .28f)
     val over = lerp(color, Color.White, .3f)
+    val lit = kotlin.math.ceil(minOf(energy, 10) * (1f - drain)).toInt()
     for (i in 0 until 10) {
         val tint = when {
+            i >= lit -> off
             energy > 10 && i < energy - 10 -> over
-            i < energy -> color
-            else -> off
+            else -> color
         }
-        drawArc(tint, -90f + i * 36f + gap / 2, 36f - gap, false, topLeft, arcSize, style = Stroke(stroke, cap = StrokeCap.Round))
-    }
-    if (holdProgress > 0f) {
-        val inner = size.minDimension * .38f
-        drawArc(Warn, -90f, 360f * holdProgress, false, Offset(center.x - inner, center.y - inner), Size(inner * 2, inner * 2),
-            style = Stroke(size.minDimension * .024f, cap = StrokeCap.Round))
+        val start = -90f + (i / 5) * 180f + halfGap / 2 + (i % 5) * cell + gap / 2
+        drawArc(tint, start, cell - gap, false, topLeft, arcSize, style = Stroke(stroke, cap = StrokeCap.Butt))
     }
 }
 
@@ -419,45 +427,38 @@ private fun EnergyHalf(description: String, up: Boolean, enabled: Boolean, inter
                 }
             } finally { timer?.cancel(); latestHolding(false); gesture.cancel() }
         }
-    }) {
-        val tint = color.copy(alpha = if (enabled) .45f else .18f)
-        Canvas(Modifier.align(Alignment.CenterStart).padding(start = 20.dp).size(16.dp).testTag(if (up) "add-mark" else "remove-mark")) {
-            val w = 1.8.dp.toPx()
-            drawLine(tint, Offset(0f, size.height / 2), Offset(size.width, size.height / 2), w, StrokeCap.Round)
-            if (up) drawLine(tint, Offset(size.width / 2, 0f), Offset(size.width / 2, size.height), w, StrokeCap.Round)
-        }
-    }
+    })
 }
 
 @Composable
 private fun Hub(open: Boolean, modifier: Modifier, onClick: () -> Unit) {
     Box(modifier.size(68.dp).clip(CircleShape).background(Background).padding(6.dp).clip(CircleShape)
-        .background(if (open) Lime else Color(0xff1f2628)).testTag("menu")
+        .background(Color(0xff2a3136)).border(1.5.dp, Color(0xff59646a), CircleShape).testTag("menu")
         .clickable(role = Role.Button, onClickLabel = if (open) "Close menu" else "Open menu", onClick = onClick)
         .semantics { contentDescription = if (open) "Close menu" else "Open menu" }, contentAlignment = Alignment.Center) {
-        Canvas(Modifier.size(34.dp)) {
+        Canvas(Modifier.size(38.dp)) {
             val s = size.width / 512f
-            val bright = if (open) Background else Lime
-            val dim = if (open) Background.copy(alpha = .5f) else Color(0xff52623d)
-            val r = 132f * s
-            val topLeft = Offset(center.x - r, center.y - r)
-            val stroke = Stroke(34f * s, cap = StrokeCap.Round)
-            drawArc(bright, 135f, 80f, false, topLeft, Size(r * 2, r * 2), style = stroke)
-            drawArc(bright, 230f, 80f, false, topLeft, Size(r * 2, r * 2), style = stroke)
-            drawArc(dim, 325f, 80f, false, topLeft, Size(r * 2, r * 2), style = stroke)
-            drawPath(Path().apply {
-                moveTo(276f * s, 176f * s); lineTo(210f * s, 270f * s); lineTo(253f * s, 270f * s)
-                lineTo(237f * s, 337f * s); lineTo(304f * s, 240f * s); lineTo(261f * s, 240f * s); close()
-            }, bright)
+            if (open) {
+                val closeStroke = 40f * s
+                drawLine(Ink, Offset(166f * s, 166f * s), Offset(346f * s, 346f * s), closeStroke, StrokeCap.Round)
+                drawLine(Ink, Offset(346f * s, 166f * s), Offset(166f * s, 346f * s), closeStroke, StrokeCap.Round)
+                return@Canvas
+            }
+            // The familiar grid glyph for "more actions".
+            val tile = Size(96f * s, 96f * s)
+            val corner = androidx.compose.ui.geometry.CornerRadius(22f * s)
+            for (x in listOf(146f, 270f)) for (y in listOf(146f, 270f)) {
+                drawRoundRect(Lime, Offset(x * s, y * s), tile, corner)
+            }
         }
     }
 }
 
-private enum class MenuIcon { Undo, First, NewGame, Setup }
+private enum class MenuIcon { Undo, NewGame, Setup }
 
-/** Shared actions sit around the hub: two above it, two below, so no seat has to reach further. */
+/** Shared actions sit around the hub: Undo above it, the rest below, so no seat has to reach further. */
 @Composable
-private fun BoxScope.Menu(session: TrackerSession, onPickFirst: () -> Unit) {
+private fun BoxScope.Menu(session: TrackerSession) {
     var confirming by remember { mutableStateOf(false) }
     Box(Modifier.matchParentSize().background(Scrim)
         .clickable(interactionSource = null, indication = null, onClickLabel = "Close menu") { session.showMenu(false) })
@@ -471,38 +472,38 @@ private fun BoxScope.Menu(session: TrackerSession, onPickFirst: () -> Unit) {
                     OutlinedButton({ confirming = false }, Modifier.weight(1f).heightIn(min = 48.dp), shape = RoundedCornerShape(12.dp),
                         border = BorderStroke(1.dp, Line)) { Text("Cancel", color = Ink) }
                     Button({ session.newGame() }, Modifier.weight(1f).heightIn(min = 48.dp).testTag("confirm-new"),
-                        shape = RoundedCornerShape(12.dp)) { Text("New game") }
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Warn, contentColor = Color(0xff2a1a08))) {
+                        Text("New game", fontWeight = FontWeight.SemiBold)
+                    }
                 }
-            } else Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            } else Row(Modifier.height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 val last = session.history.lastOrNull()
                 MenuTile("Undo", last?.label ?: "Nothing yet", MenuIcon.Undo, last != null, "menu-undo", Modifier.weight(1f)) {
                     session.undo(); session.showMenu(false)
-                }
-                MenuTile("Who goes first", null, MenuIcon.First, true, "menu-first", Modifier.weight(1f)) {
-                    session.showMenu(false); onPickFirst()
                 }
             }
         }
         Spacer(Modifier.height(68.dp))
         Box(Modifier.weight(1f).fillMaxWidth().padding(top = 10.dp), contentAlignment = Alignment.TopCenter) {
-            if (!confirming) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                MenuTile("New game", null, MenuIcon.NewGame, true, "menu-new", Modifier.weight(1f)) { confirming = true }
-                MenuTile("Setup", null, MenuIcon.Setup, true, "setup", Modifier.weight(1f)) { session.showSetup(true) }
+            if (!confirming) Row(Modifier.height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                MenuTile("New game", "Everyone to 0", MenuIcon.NewGame, true, "menu-new", Modifier.weight(1f)) { confirming = true }
+                MenuTile("Setup", "Players, colours", MenuIcon.Setup, true, "setup", Modifier.weight(1f)) { session.showSetup(true) }
             }
         }
     }
 }
 
 @Composable
-private fun MenuTile(title: String, detail: String?, icon: MenuIcon, enabled: Boolean, tag: String, modifier: Modifier, onClick: () -> Unit) {
+private fun MenuTile(title: String, detail: String, icon: MenuIcon, enabled: Boolean, tag: String, modifier: Modifier, onClick: () -> Unit) {
     val shape = RoundedCornerShape(18.dp)
-    Column(modifier.heightIn(min = 92.dp).clip(shape).background(Surface).border(1.dp, Line, shape).testTag(tag)
+    Column(modifier.fillMaxHeight().heightIn(min = 104.dp).clip(shape).background(Surface).border(1.dp, Line, shape).testTag(tag)
         .clickable(enabled = enabled, role = Role.Button, onClick = onClick).padding(horizontal = 8.dp, vertical = 14.dp)
         .graphicsLayer { alpha = if (enabled) 1f else .4f },
         verticalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterVertically), horizontalAlignment = Alignment.CenterHorizontally) {
-        Canvas(Modifier.size(22.dp)) { drawMenuIcon(icon, Lime) }
-        Text(title, fontSize = 14.sp, fontWeight = FontWeight.Medium, textAlign = TextAlign.Center)
-        if (detail != null) Text(detail, fontSize = 12.sp, color = Muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Canvas(Modifier.size(24.dp)) { drawMenuIcon(icon, if (icon == MenuIcon.NewGame) Warn else Lime) }
+        Text(title, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
+        Text(detail, fontSize = 12.sp, color = Muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -519,13 +520,13 @@ private fun DrawScope.drawMenuIcon(icon: MenuIcon, color: Color) {
                 lineTo(11f * s, 20f * s)
             }, color, style = stroke)
         }
-        MenuIcon.First -> {
-            drawRoundRect(color, p(3f, 3f), Size(18f * s, 18f * s), androidx.compose.ui.geometry.CornerRadius(4f * s), style = stroke)
-            listOf(p(8.5f, 8.5f), p(12f, 12f), p(15.5f, 15.5f)).forEach { drawCircle(color, 1.4f * s, it) }
-        }
         MenuIcon.NewGame -> {
-            drawArc(color, -150f, 300f, false, p(3f, 3f), Size(18f * s, 18f * s), style = stroke)
-            drawPath(Path().apply { moveTo(3f * s, 3.5f * s); lineTo(3.6f * s, 8.3f * s); lineTo(8.4f * s, 7.6f * s) }, color, style = stroke)
+            // A flag: Undo already owns the curved arrow.
+            drawLine(color, p(6f, 3f), p(6f, 21f), stroke.width, StrokeCap.Round)
+            drawPath(Path().apply {
+                moveTo(6f * s, 4f * s); lineTo(19f * s, 4f * s); lineTo(15.5f * s, 8.5f * s)
+                lineTo(19f * s, 13f * s); lineTo(6f * s, 13f * s)
+            }, color, style = stroke)
         }
         MenuIcon.Setup -> {
             drawLine(color, p(4f, 7f), p(14f, 7f), stroke.width, StrokeCap.Round)
@@ -553,7 +554,8 @@ private fun BoxScope.SetupSheet(session: TrackerSession, availableHeight: Dp, fe
                 Text("×", color = Muted, fontSize = 28.sp)
             }
         }
-        Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()).padding(start = 20.dp, end = 20.dp, bottom = 16.dp),
+        Box(Modifier.weight(1f, fill = false)) {
+        Column(Modifier.verticalScroll(rememberScrollState()).padding(start = 20.dp, end = 20.dp, bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(22.dp)) {
             Section("Players") {
                 Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Background).padding(4.dp),
@@ -561,9 +563,9 @@ private fun BoxScope.SetupSheet(session: TrackerSession, availableHeight: Dp, fe
                     listOf(2, 4).forEach { count ->
                         val selected = session.board.preferences.count == count
                         Box(Modifier.weight(1f).heightIn(min = 48.dp).clip(RoundedCornerShape(10.dp))
-                            .background(if (selected) Color(0xff273032) else Color.Transparent).testTag("count-$count")
+                            .background(if (selected) Lime.copy(alpha = .2f) else Color.Transparent).testTag("count-$count")
                             .selectable(selected, role = Role.RadioButton) { session.setCount(count) }, contentAlignment = Alignment.Center) {
-                            Text("$count players", fontWeight = FontWeight.SemiBold, color = if (selected) Ink else Muted)
+                            Text("$count players", fontWeight = FontWeight.SemiBold, color = if (selected) Lime else Muted)
                         }
                     }
                 }
@@ -580,6 +582,10 @@ private fun BoxScope.SetupSheet(session: TrackerSession, availableHeight: Dp, fe
                     }
                 }
             }
+        }
+        // Fades the cut-off row so the list reads as scrollable.
+        Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(24.dp)
+            .background(Brush.verticalGradient(listOf(Color.Transparent, Surface))))
         }
         HorizontalDivider(color = Line)
         Button({ session.showSetup(false) }, Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 14.dp).heightIn(min = 48.dp).testTag("done"),
@@ -626,7 +632,7 @@ private fun PlayerSettings(session: TrackerSession, id: Int) {
         Row(Modifier.fillMaxWidth().semantics { contentDescription = "Colour for ${player.preference.label}" }) {
             PLAYER_COLORS.forEachIndexed { index, value ->
                 val selected = player.preference.color == value
-                Box(Modifier.weight(1f).height(48.dp).testTag("color-$id-$index")
+                Box(Modifier.weight(1f).height(48.dp).clip(RoundedCornerShape(24.dp)).testTag("color-$id-$index")
                     .selectable(selected, role = Role.RadioButton) { session.setColor(id, value) }
                     .semantics { contentDescription = COLOR_NAMES[index] }, contentAlignment = Alignment.Center) {
                     Box(Modifier.size(32.dp).clip(CircleShape).then(if (selected) Modifier.border(2.dp, Ink, CircleShape).padding(4.dp) else Modifier)
@@ -653,6 +659,6 @@ private fun SwitchRow(title: String, detail: String, checked: Boolean, enabled: 
         }
         Switch(checked = checked, onCheckedChange = null, enabled = enabled, modifier = Modifier.clearAndSetSemantics {},
             colors = SwitchDefaults.colors(checkedTrackColor = Lime, checkedThumbColor = Color(0xff10170a),
-                uncheckedTrackColor = Color(0xff2a3234), uncheckedThumbColor = Ink, uncheckedBorderColor = Color.Transparent))
+                uncheckedTrackColor = Color(0xff2a3136), uncheckedThumbColor = Ink, uncheckedBorderColor = Color(0xff7b878c)))
     }
 }

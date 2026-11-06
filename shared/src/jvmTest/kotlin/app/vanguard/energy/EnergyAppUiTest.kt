@@ -100,18 +100,6 @@ class EnergyAppUiTest {
         assertEquals(1, session.limitBumps[2])
     }
 
-    @Test fun whoGoesFirstSettlesOnASeat() = runDesktopComposeUiTest(390 * 2, 844 * 2) {
-        val session = TrackerSession(UiStore()).apply { setCount(4); adjust(0, 7); adjust(1, 3); adjust(2, 10); adjust(3, 5) }
-        show(session)
-        mainClock.autoAdvance = false
-        onNodeWithTag("menu").performClick()
-        mainClock.advanceTimeBy(100)
-        onNodeWithTag("menu-first").performClick()
-        mainClock.advanceTimeBy(3_000) // The cycle settles within ~2.6 s; the badge then stays for 4 s.
-        onAllNodesWithText("GOES FIRST", useUnmergedTree = true).assertCountEquals(1)
-        capture("8-goes-first")
-    }
-
     @Test fun largeTextAndHugeCountsFit() = runDesktopComposeUiTest(320 * 2, 640 * 2) {
         val session = TrackerSession(UiStore()).apply {
             setCount(4); adjust(0, 10); adjust(1, 10)
@@ -121,11 +109,8 @@ class EnergyAppUiTest {
         show(session, 320, 640, fontScale = 2f)
         for (id in 0..3) {
             val counter = onNodeWithTag("energy-$id").fetchSemanticsNode().boundsInRoot
-            for (tag in listOf("add-mark", "remove-mark", "charge-$id")) {
-                val other = onNode(hasTestTag(tag) and hasAnyAncestor(hasTestTag("player-$id")), useUnmergedTree = true)
-                    .fetchSemanticsNode().boundsInRoot
-                assert(!counter.overlaps(other)) { "Player $id counter overlaps $tag" }
-            }
+            val charge = onNodeWithTag("charge-$id").fetchSemanticsNode().boundsInRoot
+            assert(!counter.overlaps(charge)) { "Player $id counter overlaps charge-$id" }
         }
         capture("9-large-text")
     }

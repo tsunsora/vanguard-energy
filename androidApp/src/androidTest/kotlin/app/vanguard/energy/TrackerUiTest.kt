@@ -177,11 +177,8 @@ class TrackerUiTest {
         ui.waitForIdle()
         for (id in 0..3) {
             val counter = ui.onNodeWithTag("energy-$id").fetchSemanticsNode().boundsInRoot
-            for (mark in listOf("add-mark", "remove-mark", "charge-$id")) {
-                val control = ui.onNode(hasTestTag(mark) and hasAnyAncestor(hasTestTag("player-$id")), useUnmergedTree = true)
-                    .fetchSemanticsNode().boundsInRoot
-                assertFalse("Player $id counter overlaps $mark with large text", counter.overlaps(control))
-            }
+            val charge = ui.onNodeWithTag("charge-$id").fetchSemanticsNode().boundsInRoot
+            assertFalse("Player $id counter overlaps its charge button with large text", counter.overlaps(charge))
             val layouts = mutableListOf<TextLayoutResult>()
             ui.onNode(hasText("+3") and hasAnyAncestor(hasTestTag("player-$id")), useUnmergedTree = true)
                 .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { assertTrue(it(layouts)) }

@@ -12,15 +12,15 @@ An offline energy tracker for **two or four Cardfight!! Vanguard players**, rewr
 
 | Control | Action |
 | --- | --- |
-| Upper half of a player's area (**+**) | Add 1 energy |
-| Lower half (**−**) | Remove 1 energy |
+| Upper half of a player's area | Add 1 energy |
+| Lower half | Remove 1 energy |
 | **+3** button | Charge 3 energy, up to that player's limit |
-| Hold the lower half for 0.6 seconds | Reset that player to zero; a ring fills while holding, slide away to cancel |
-| Center button | Open the menu: **Undo**, **Who goes first**, **New game**, and **Setup** |
+| Hold the lower half for 0.6 seconds | Reset that player to zero; the lit ring segments drain while holding, slide away to cancel |
+| Center button | Open the menu: **Undo**, **New game**, and **Setup** |
 
 Each player's energy sits inside a ring of 10 segments, so totals read at a glance from across the table. A small running total (such as **+5**) shows the last few changes, and a tap at the limit shows **Max 10** instead of silently doing nothing. Controls face each player's side of the table. Players can act simultaneously, including repeated taps while another player holds a control. Names are labels only and do not respond to taps. With a control focused, Enter or Space adjusts energy; holding the lower half for 0.6 seconds resets it. Moving keyboard focus or opening the menu or Setup cancels a pending hold. Accessibility actions also support adjustments and resets. Counters and charge labels fit the available space with large system text settings.
 
-**Undo** reverses the last count change, including resets and New game, up to 50 steps back. **Who goes first** cycles a highlight around the table and settles on a random player. **New game** asks before returning everyone to zero.
+**Undo** reverses the last count change, including resets and New game, up to 50 steps back. **New game** asks before returning everyone to zero.
 
 In **Setup**, choose two or four players and give each player a name and one of six colours; two are colour-blind-safe, and every seat also has its own shape marker. Each counter stops at 10 by default. Enable a player's **Allow energy above 10** switch to allow up to 9,999. Lower their energy to 10 before switching it off. Changing settings never silently discards energy. **Vibrate on taps** is off by default; when on, it uses the system's light haptic feedback and needs no extra permission.
 
