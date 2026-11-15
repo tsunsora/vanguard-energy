@@ -62,13 +62,20 @@ import kotlin.math.abs
 private val Background = Color(0xff0b0d10)
 private val ZoneBase = Color(0xff121417)
 private val Surface = Color(0xff1a1f23)
-private val Field = Color(0xff1e2327)
+private val Raised = Color(0xff22282c)
 private val Line = Color(0xff30383c)
+/** Outline for controls that must read as controls: 3.6:1 on Surface. */
+private val Outline = Color(0xff6b777d)
+private val Hairline = Color(0x14e8eee6)
 private val Ink = Color(0xffe8eee6)
+private val InkSecondary = Color(0xffa9b3ad)
 private val Muted = Color(0xff8f9b94)
-private val Lime = Color(0xffc9f76f)
+/** Chrome is neutral: Lime and Orange are seat colours, so the app's own controls never use them. */
+private val OnInk = Color(0xff101315)
 private val Warn = Color(0xffffb36b)
-private val Scrim = Color(0xd9050709)
+private val Scrim = Color(0xe6050709)
+/** One curve for every decorative transition; the timed hold stays linear. */
+private val Ease = CubicBezierEasing(.22f, 1f, .36f, 1f)
 /** Table chrome stops growing here so it can never outweigh the count; Setup still scales fully. */
 private const val TABLE_TEXT_SCALE = 1.3f
 private const val HOLD_MS = 600
@@ -88,7 +95,7 @@ fun EnergyApp(session: TrackerSession) {
             titleLarge = default.titleLarge.copy(fontFamily = uiFont),
         )
     }
-    MaterialTheme(colorScheme = darkColorScheme(primary = Lime, onPrimary = Color(0xff10170a), background = Background,
+    MaterialTheme(colorScheme = darkColorScheme(primary = Ink, onPrimary = OnInk, background = Background,
         surface = Surface, onSurface = Ink), typography = typography) {
       CompositionLocalProvider(LocalContentColor provides Ink, LocalTextStyle provides typography.bodyMedium) {
         val haptics = LocalHapticFeedback.current
@@ -115,6 +122,7 @@ fun EnergyApp(session: TrackerSession) {
             Hub(session.menuOpen, Modifier.align(Alignment.Center).then(if (session.setupOpen) Modifier.clearAndSetSemantics {} else Modifier)) {
                 session.showMenu(!session.menuOpen)
             }
+            if (!overlay) QuickUndo(session, Modifier.align(Alignment.Center))
             if (session.setupOpen) SetupSheet(session, maxHeight, feel)
             session.saveWarning?.let { warning ->
                 Text(warning, Modifier.align(Alignment.TopCenter).padding(8.dp).clip(RoundedCornerShape(8.dp))
@@ -127,7 +135,7 @@ fun EnergyApp(session: TrackerSession) {
 }
 
 @Composable
-private fun PlayerZone(player: Player, rotated: Boolean, nameOnRight: Boolean, bumps: Int,
+private fun PlayerZone(player: Player, rotated: Boolean, markOnRight: Boolean, bumps: Int,
     interactive: Boolean, session: TrackerSession, digits: FontFamily, feel: Feel, modifier: Modifier) {
     val id = player.preference.id
     val name = player.preference.label
@@ -167,7 +175,8 @@ private fun PlayerZone(player: Player, rotated: Boolean, nameOnRight: Boolean, b
         limitNotice = true
         deltaShown++
         shake.snapTo(0f)
-        shake.animateTo(0f, keyframes { durationMillis = 320; 6f at 90; -5f at 180; 2f at 260 })
+        // One short nudge, not a wobble; the haptic reject carries the rest.
+        shake.animateTo(0f, keyframes { durationMillis = 150; 5f at 50 using Ease })
     }
     LaunchedEffect(deltaShown) {
         if (deltaShown == 0) return@LaunchedEffect
@@ -178,7 +187,7 @@ private fun PlayerZone(player: Player, rotated: Boolean, nameOnRight: Boolean, b
     }
 
     BoxWithConstraints(modifier.clip(shape)
-        .border(1.5.dp, color.copy(alpha = .32f), shape)
+        .border(1.dp, Hairline, shape)
         .testTag("player-$id")) {
         val zoneWidth = maxWidth
         val zoneHeight = maxHeight
@@ -191,10 +200,8 @@ private fun PlayerZone(player: Player, rotated: Boolean, nameOnRight: Boolean, b
         fun Dp.sp() = with(density) { toSp() }
         fun tableSp(value: Float) = (value * minOf(density.fontScale, TABLE_TEXT_SCALE) / density.fontScale).sp
         Box(Modifier.fillMaxSize().graphicsLayer { rotationZ = if (rotated) 180f else 0f }.drawBehind {
-            // A neutral base stays clean in dim rooms; the colour lives in a glow behind the count.
-            drawRect(lerp(ZoneBase, color, .08f))
-            drawRect(Brush.radialGradient(listOf(color.copy(alpha = .28f), color.copy(alpha = .1f), Color.Transparent),
-                center, maxOf(dial.toPx() * .72f, 1f)))
+            // A flat neutral surface: the seat colour lives only in the ring, the count and the seat mark.
+            drawRect(ZoneBase)
         }) {
             Column(Modifier.fillMaxSize()) {
                 EnergyHalf("Add 1 energy to $name", true, player.energy < player.limit, interactive, false, color,
@@ -212,20 +219,23 @@ private fun PlayerZone(player: Player, rotated: Boolean, nameOnRight: Boolean, b
                 val drain = ((holdProgress - .15f) / .85f).coerceIn(0f, 1f)
                 Canvas(Modifier.fillMaxSize()) {
                     drawDial(player.energy, color, drain)
-                    // Rotated seats face each other, so a lone 6 or 9 gets the dice-style dot ("6.")
-                    // at its baseline to say which way up it is.
+                    // Rotated seats face each other, so a lone 6 or 9 is underlined, as on dice and
+                    // card stats, to say which way up it is.
                     if (player.energy == 6 || player.energy == 9) {
-                        drawCircle(color, size.minDimension * .026f, Offset(size.width * .68f, size.height * .738f))
+                        val bar = size.minDimension * .026f
+                        drawRoundRect(color, Offset(size.width * .4f, size.height * .775f), Size(size.width * .2f, bar),
+                            androidx.compose.ui.geometry.CornerRadius(bar / 2))
                     }
                 }
                 // The slot above the number is empty at rest. The reset word goes here because it is on
                 // the far side of the zone from the holding thumb.
+                // One word for the limit, at rest and when a tap is refused.
                 val full = player.limit == 10 && player.energy == 10
                 val notice = when {
-                    drain > .1f -> "RESET"
-                    limitNotice -> "MAX ${player.limit}"
+                    drain > .1f -> "Reset"
+                    limitNotice -> "Max ${player.limit}"
                     deltaText != null -> deltaText
-                    full -> "FULL"
+                    full -> "Max 10"
                     else -> null
                 }
                 if (notice != null) BasicText(notice, Modifier.align(Alignment.TopCenter).padding(top = dial * .065f).clearAndSetSemantics {},
@@ -233,8 +243,7 @@ private fun PlayerZone(player: Player, rotated: Boolean, nameOnRight: Boolean, b
                         fontSize = (dial * .125f).coerceAtLeast(16.dp).sp(), color = when {
                             drain > .1f -> Ink
                             limitNotice || (deltaText == null && full) -> color
-                            deltaSum < 0 -> lerp(Ink, color, .3f)
-                            else -> lerp(Ink, color, .5f)
+                            else -> InkSecondary
                         }), maxLines = 1)
                 val digitsShown = player.energy.toString().length
                 val numberDp = dial * when (digitsShown) { 1 -> .74f; 2 -> .66f; 3 -> .48f; else -> .38f }
@@ -250,33 +259,44 @@ private fun PlayerZone(player: Player, rotated: Boolean, nameOnRight: Boolean, b
                         color = color, textAlign = TextAlign.Center), maxLines = 1,
                     autoSize = TextAutoSize.StepBased(minFontSize = 1.sp, maxFontSize = numberSize, stepSize = .5.sp))
             }
-            Row(Modifier.align(if (nameOnRight) Alignment.TopEnd else Alignment.TopStart).padding(10.dp)
-                .widthIn(max = min(160.dp, (zoneWidth - 24.dp).coerceAtLeast(1.dp))).height(40.dp)
-                .consumeTouches().padding(6.dp), verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Canvas(Modifier.size(13.dp)) { drawSeatMark(id, lerp(color, Ink, .1f)) }
-                BasicText(name, style = MaterialTheme.typography.bodyMedium.copy(color = lerp(color, Ink, .1f),
-                    fontWeight = FontWeight.SemiBold, lineHeight = TextUnit.Unspecified),
-                    maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    autoSize = TextAutoSize.StepBased(minFontSize = 12.sp, maxFontSize = tableSp(if (zoneWidth <= 260.dp) 15f else 17f), stepSize = .5.sp))
+            // No name label: the seat's shape and colour identify it, so colour is never the only signal.
+            Box(Modifier.align(if (markOnRight) Alignment.TopEnd else Alignment.TopStart).padding(16.dp).size(14.dp)
+                .clearAndSetSemantics {}) {
+                Canvas(Modifier.fillMaxSize()) { drawSeatMark(id, color) }
+            }
+            // Quiet + and − cues say which half adds and which removes, in this seat's own orientation.
+            // They sit on the side away from the seat mark, level with the middle of each half.
+            val cueSide = if (markOnRight) Alignment.TopStart else Alignment.TopEnd
+            listOf(true, false).forEach { plus ->
+                Canvas(Modifier.align(cueSide).offset(y = zoneHeight * (if (plus) .25f else .75f) - 8.dp)
+                    .padding(horizontal = 14.dp).size(16.dp).clearAndSetSemantics {}) {
+                    val w = 2.dp.toPx()
+                    val cue = Ink.copy(alpha = .5f)
+                    drawLine(cue, Offset(0f, size.height / 2), Offset(size.width, size.height / 2), w, StrokeCap.Round)
+                    if (plus) drawLine(cue, Offset(size.width / 2, 0f), Offset(size.width / 2, size.height), w, StrokeCap.Round)
+                }
             }
             val canCharge = player.energy < player.limit
-            Row(Modifier.align(Alignment.BottomCenter).padding(bottom = 12.dp).height(48.dp)
-                .widthIn(min = min(116.dp, (zoneWidth - 32.dp).coerceAtLeast(1.dp)), max = (zoneWidth - 32.dp).coerceAtLeast(1.dp))
-                // Maxed out: an empty outline, still legible, so it reads as off rather than missing.
-                .clip(CircleShape).then(if (canCharge) Modifier.background(lerp(ZoneBase, color, .24f)) else Modifier)
-                .border(1.5.dp, color.copy(alpha = if (canCharge) .6f else .4f), CircleShape)
-                .testTag("charge-$id").clickable(enabled = canCharge && interactive, role = Role.Button) {
-                    if (session.adjust(id, 3)) feel(HapticFeedbackType.Confirm)
+            val chargeShape = RoundedCornerShape(14.dp)
+            // A dead margin around +3: a near miss does nothing rather than removing 1.
+            Box(Modifier.align(Alignment.BottomCenter).consumeTouchesOutside(12.dp).padding(12.dp)) {
+                Row(Modifier.height(48.dp)
+                    .widthIn(min = min(116.dp, (zoneWidth - 32.dp).coerceAtLeast(1.dp)), max = (zoneWidth - 32.dp).coerceAtLeast(1.dp))
+                    // Maxed out: no fill and dim text, so it reads as off rather than missing.
+                    .clip(chargeShape).then(if (canCharge) Modifier.background(Raised) else Modifier)
+                    .border(1.dp, if (canCharge) Outline else Line, chargeShape)
+                    // Still tappable at the limit, so the tap can explain itself as the + half does.
+                    .testTag("charge-$id").clickable(enabled = interactive, role = Role.Button) {
+                        if (session.adjust(id, 3)) feel(HapticFeedbackType.Confirm) else feel(HapticFeedbackType.Reject)
+                    }
+                    .semantics { contentDescription = "Charge +3 for $name"; if (!canCharge) stateDescription = "At the limit" }
+                    .padding(horizontal = 16.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                    Canvas(Modifier.size(18.dp)) { drawBolt(if (canCharge) color else Muted) }
+                    Spacer(Modifier.width(6.dp))
+                    BasicText("+3", style = MaterialTheme.typography.bodyLarge.copy(color = if (canCharge) Ink else InkSecondary,
+                        fontWeight = FontWeight.SemiBold, lineHeight = TextUnit.Unspecified), maxLines = 1,
+                        autoSize = TextAutoSize.StepBased(minFontSize = 1.sp, maxFontSize = tableSp(18f), stepSize = .5.sp))
                 }
-                .semantics { contentDescription = "Charge +3 for $name"; if (!canCharge) disabled() }
-                .padding(horizontal = 16.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-                val tint = color.copy(alpha = if (canCharge) 1f else .7f)
-                Canvas(Modifier.size(18.dp)) { drawBolt(tint) }
-                Spacer(Modifier.width(6.dp))
-                BasicText("+3", style = MaterialTheme.typography.bodyLarge.copy(color = tint, fontWeight = FontWeight.SemiBold,
-                    lineHeight = TextUnit.Unspecified), maxLines = 1,
-                    autoSize = TextAutoSize.StepBased(minFontSize = 1.sp, maxFontSize = tableSp(18f), stepSize = .5.sp))
             }
         }
     }
@@ -295,14 +315,10 @@ private fun DrawScope.drawDial(energy: Int, color: Color, drain: Float) {
     val halfGap = 9f
     val cell = (180f - halfGap) / 5
     val off = lerp(Color(0xff2a3134), color, .28f)
-    val over = lerp(color, Color.White, .3f)
     val lit = kotlin.math.ceil(minOf(energy, 10) * (1f - drain)).toInt()
     for (i in 0 until 10) {
-        val tint = when {
-            i >= lit -> off
-            energy > 10 && i < energy - 10 -> over
-            else -> color
-        }
+        // Above 10 the ring simply stays full; the number carries the rest.
+        val tint = if (i >= lit) off else color
         val start = -90f + (i / 5) * 180f + halfGap / 2 + (i % 5) * cell + gap / 2
         drawArc(tint, start, cell - gap, false, topLeft, arcSize, style = Stroke(stroke, cap = StrokeCap.Butt))
     }
@@ -327,8 +343,19 @@ private fun DrawScope.drawBolt(color: Color) {
     }, color)
 }
 
-private fun Modifier.consumeTouches() = pointerInput(Unit) {
-    awaitPointerEventScope { while (true) awaitPointerEvent().changes.forEach { it.consume() } }
+/**
+ * Swallows touches in a margin of [inset] around the content, so the energy half underneath never sees
+ * a near miss. Touches on the content itself are left alone: consuming them would cancel its own tap.
+ */
+private fun Modifier.consumeTouchesOutside(inset: Dp) = pointerInput(inset) {
+    val edge = inset.toPx()
+    awaitPointerEventScope {
+        while (true) awaitPointerEvent().changes.forEach {
+            val p = it.position
+            val inside = p.x in edge..(size.width - edge) && p.y in edge..(size.height - edge)
+            if (!inside) it.consume()
+        }
+    }
 }
 
 @Composable
@@ -347,7 +374,7 @@ private fun EnergyHalf(description: String, up: Boolean, enabled: Boolean, inter
     var keyTimer by remember { mutableStateOf<Job?>(null) }
     fun tap() {
         latestTap()
-        scope.launch { flash.snapTo(.1f); flash.animateTo(0f, tween(350)) }
+        scope.launch { flash.snapTo(.1f); flash.animateTo(0f, tween(220, easing = Ease)) }
     }
     fun cancelKeyGesture() {
         keyTimer?.cancel()
@@ -433,77 +460,124 @@ private fun EnergyHalf(description: String, up: Boolean, enabled: Boolean, inter
 @Composable
 private fun Hub(open: Boolean, modifier: Modifier, onClick: () -> Unit) {
     Box(modifier.size(68.dp).clip(CircleShape).background(Background).padding(6.dp).clip(CircleShape)
-        .background(Color(0xff2a3136)).border(1.5.dp, Color(0xff59646a), CircleShape).testTag("menu")
+        .background(Raised).border(1.dp, Outline, CircleShape).testTag("menu")
         .clickable(role = Role.Button, onClickLabel = if (open) "Close menu" else "Open menu", onClick = onClick)
         .semantics { contentDescription = if (open) "Close menu" else "Open menu" }, contentAlignment = Alignment.Center) {
-        Canvas(Modifier.size(38.dp)) {
-            val s = size.width / 512f
+        Canvas(Modifier.size(24.dp)) {
+            val s = size.width / 24f
             if (open) {
-                val closeStroke = 40f * s
-                drawLine(Ink, Offset(166f * s, 166f * s), Offset(346f * s, 346f * s), closeStroke, StrokeCap.Round)
-                drawLine(Ink, Offset(346f * s, 166f * s), Offset(166f * s, 346f * s), closeStroke, StrokeCap.Round)
+                drawLine(Ink, Offset(7f * s, 7f * s), Offset(17f * s, 17f * s), 2f * s, StrokeCap.Round)
+                drawLine(Ink, Offset(17f * s, 7f * s), Offset(7f * s, 17f * s), 2f * s, StrokeCap.Round)
                 return@Canvas
             }
-            // The familiar grid glyph for "more actions".
-            val tile = Size(96f * s, 96f * s)
-            val corner = androidx.compose.ui.geometry.CornerRadius(22f * s)
-            for (x in listOf(146f, 270f)) for (y in listOf(146f, 270f)) {
-                drawRoundRect(Lime, Offset(x * s, y * s), tile, corner)
-            }
+            // A neutral "more" glyph: the hub is chrome, so it never borrows a seat colour.
+            for (x in listOf(5f, 12f, 19f)) drawCircle(Ink, 1.9f * s, Offset(x * s, 12f * s))
         }
+    }
+}
+
+/**
+ * For a few seconds after a reset or New game, an Undo chip sits beside the hub, so a mistaken hold
+ * is one tap from recovery. It names the seat by its shape and colour; any later change dismisses it.
+ */
+@Composable
+private fun QuickUndo(session: TrackerSession, modifier: Modifier) {
+    val history = session.history
+    var shown by remember { mutableStateOf<UndoStep?>(null) }
+    var seenSize by remember { mutableIntStateOf(history.size) }
+    LaunchedEffect(history) {
+        val last = history.lastOrNull()
+        val added = history.size > seenSize || (history.size == 50 && last != shown)
+        seenSize = history.size
+        if (last != null && last.reset && added) {
+            shown = last
+            delay(5_000)
+        }
+        shown = null
+    }
+    val step = shown ?: return
+    val shape = RoundedCornerShape(14.dp)
+    // Faces the seat that was reset, and sits to that player's right of the hub.
+    val faceAway = step.seat != null && session.board.rotated(step.seat)
+    Box(modifier.offset(x = if (faceAway) (-86).dp else 86.dp).graphicsLayer { rotationZ = if (faceAway) 180f else 0f }
+        // A dead margin, as around +3, so a hurried miss doesn't change a neighbouring count.
+        .consumeTouchesOutside(12.dp).padding(12.dp)) {
+    Row(Modifier.height(48.dp).clip(shape).background(Raised).border(1.dp, Outline, shape).testTag("quick-undo")
+        .clickable(role = Role.Button, onClickLabel = "Undo") { session.undo() }
+        .semantics { contentDescription = "Undo ${step.description}" }
+        .padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Canvas(Modifier.size(18.dp)) { drawMenuIcon(MenuIcon.Undo, Ink) }
+        step.seat?.let { seat ->
+            val color = playerColor(session.board.preferences.players[seat].color)
+            Canvas(Modifier.size(11.dp)) { drawSeatMark(seat, color) }
+        }
+        Text("Undo", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Ink)
+    }
     }
 }
 
 private enum class MenuIcon { Undo, NewGame, Setup }
 
-/** Shared actions sit around the hub: Undo above it, the rest below, so no seat has to reach further. */
+/** Shared actions as one short list below the hub. Undo keeps the menu open so several steps can be undone. */
 @Composable
 private fun BoxScope.Menu(session: TrackerSession) {
     var confirming by remember { mutableStateOf(false) }
+    val shape = RoundedCornerShape(16.dp)
     Box(Modifier.matchParentSize().background(Scrim)
         .clickable(interactionSource = null, indication = null, onClickLabel = "Close menu") { session.showMenu(false) })
-    Column(Modifier.align(Alignment.Center).fillMaxHeight().widthIn(max = 320.dp).fillMaxWidth(.86f)) {
-        Box(Modifier.weight(1f).fillMaxWidth().padding(bottom = 10.dp), contentAlignment = Alignment.BottomCenter) {
-            if (confirming) Column(Modifier.clip(RoundedCornerShape(18.dp)).background(Surface).border(1.dp, Line, RoundedCornerShape(18.dp))
-                .padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("Start a new game?", fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
-                Text("Everyone goes back to 0. Undo can bring the counts back.", color = Muted, fontSize = 13.sp, textAlign = TextAlign.Center)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton({ confirming = false }, Modifier.weight(1f).heightIn(min = 48.dp), shape = RoundedCornerShape(12.dp),
-                        border = BorderStroke(1.dp, Line)) { Text("Cancel", color = Ink) }
-                    Button({ session.newGame() }, Modifier.weight(1f).heightIn(min = 48.dp).testTag("confirm-new"),
-                        shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = Warn, contentColor = Color(0xff2a1a08))) {
-                        Text("New game", fontWeight = FontWeight.SemiBold)
-                    }
-                }
-            } else Row(Modifier.height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                val last = session.history.lastOrNull()
-                MenuTile("Undo", last?.label ?: "Nothing yet", MenuIcon.Undo, last != null, "menu-undo", Modifier.weight(1f)) {
-                    session.undo(); session.showMenu(false)
-                }
-            }
-        }
+    Column(Modifier.align(Alignment.Center).fillMaxHeight().widthIn(max = 340.dp).fillMaxWidth(.88f)) {
+        Spacer(Modifier.weight(1f))
         Spacer(Modifier.height(68.dp))
-        Box(Modifier.weight(1f).fillMaxWidth().padding(top = 10.dp), contentAlignment = Alignment.TopCenter) {
-            if (!confirming) Row(Modifier.height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                MenuTile("New game", "Everyone to 0", MenuIcon.NewGame, true, "menu-new", Modifier.weight(1f)) { confirming = true }
-                MenuTile("Setup", "Players, colours", MenuIcon.Setup, true, "setup", Modifier.weight(1f)) { session.showSetup(true) }
+        Box(Modifier.weight(1f).fillMaxWidth().padding(top = 12.dp), contentAlignment = Alignment.TopCenter) {
+            Column(Modifier.fillMaxWidth().clip(shape).background(Surface).border(1.dp, Hairline, shape)
+                .verticalScroll(rememberScrollState())) {
+                if (confirming) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text("Start a new game?", fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+                        Text("Everyone goes back to 0. Undo can bring the counts back.", color = InkSecondary, fontSize = 14.sp)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton({ confirming = false }, Modifier.weight(1f).heightIn(min = 48.dp), shape = RoundedCornerShape(12.dp),
+                                border = BorderStroke(1.dp, Outline)) { Text("Cancel", color = Ink) }
+                            Button({ session.newGame() }, Modifier.weight(1f).heightIn(min = 48.dp).testTag("confirm-new"),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = Warn, contentColor = Color(0xff2a1a08))) {
+                                Text("New game", fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+                    }
+                } else {
+                    val last = session.history.lastOrNull()
+                    MenuRow("Undo", last?.label ?: "Nothing to undo", MenuIcon.Undo, last != null, "menu-undo",
+                        last?.seat?.let { it to playerColor(session.board.preferences.players[it].color) },
+                        last?.let { "Undo ${it.description}" }) { session.undo() }
+                    HorizontalDivider(color = Hairline)
+                    MenuRow("New game", "Everyone to 0", MenuIcon.NewGame, true, "menu-new") { confirming = true }
+                    HorizontalDivider(color = Hairline)
+                    MenuRow("Setup", "Players, colours", MenuIcon.Setup, true, "setup") { session.showSetup(true) }
+                }
             }
         }
     }
 }
 
 @Composable
-private fun MenuTile(title: String, detail: String, icon: MenuIcon, enabled: Boolean, tag: String, modifier: Modifier, onClick: () -> Unit) {
-    val shape = RoundedCornerShape(18.dp)
-    Column(modifier.fillMaxHeight().heightIn(min = 104.dp).clip(shape).background(Surface).border(1.dp, Line, shape).testTag(tag)
-        .clickable(enabled = enabled, role = Role.Button, onClick = onClick).padding(horizontal = 8.dp, vertical = 14.dp)
-        .graphicsLayer { alpha = if (enabled) 1f else .4f },
-        verticalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterVertically), horizontalAlignment = Alignment.CenterHorizontally) {
-        Canvas(Modifier.size(24.dp)) { drawMenuIcon(icon, if (icon == MenuIcon.NewGame) Warn else Lime) }
-        Text(title, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
-        Text(detail, fontSize = 12.sp, color = Muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+private fun MenuRow(title: String, detail: String, icon: MenuIcon, enabled: Boolean, tag: String,
+    seat: Pair<Int, Color>? = null, description: String? = null, onClick: () -> Unit) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).testTag(tag)
+        .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+        .then(if (description != null) Modifier.semantics { contentDescription = description } else Modifier)
+        .graphicsLayer { alpha = if (enabled) 1f else .45f }.padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+        Canvas(Modifier.size(20.dp)) { drawMenuIcon(icon, Muted) }
+        // Title over detail, so large text grows the row downwards instead of squeezing the title.
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(title, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (seat != null) Canvas(Modifier.size(10.dp)) { drawSeatMark(seat.first, seat.second) }
+                Text(detail, fontSize = 13.sp, color = InkSecondary)
+            }
+        }
     }
 }
 
@@ -541,7 +615,7 @@ private fun DrawScope.drawMenuIcon(icon: MenuIcon, color: Color) {
 
 @Composable
 private fun BoxScope.SetupSheet(session: TrackerSession, availableHeight: Dp, feel: Feel) {
-    val shape = RoundedCornerShape(26.dp)
+    val shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
     Box(Modifier.matchParentSize().background(Scrim)
         .clickable(interactionSource = null, indication = null, onClickLabel = "Close setup") { session.showSetup(false) })
     Column(Modifier.align(Alignment.BottomCenter).widthIn(max = 480.dp).fillMaxWidth()
@@ -563,23 +637,28 @@ private fun BoxScope.SetupSheet(session: TrackerSession, availableHeight: Dp, fe
                     listOf(2, 4).forEach { count ->
                         val selected = session.board.preferences.count == count
                         Box(Modifier.weight(1f).heightIn(min = 48.dp).clip(RoundedCornerShape(10.dp))
-                            .background(if (selected) Lime.copy(alpha = .2f) else Color.Transparent).testTag("count-$count")
+                            .background(if (selected) Raised else Color.Transparent)
+                            .then(if (selected) Modifier.border(1.dp, Outline, RoundedCornerShape(10.dp)) else Modifier)
+                            .testTag("count-$count")
                             .selectable(selected, role = Role.RadioButton) { session.setCount(count) }, contentAlignment = Alignment.Center) {
-                            Text("$count players", fontWeight = FontWeight.SemiBold, color = if (selected) Lime else Muted)
+                            Text("$count players", fontWeight = FontWeight.SemiBold, color = if (selected) Ink else Muted)
                         }
                     }
                 }
             }
             Section("Each player") {
-                repeat(session.board.preferences.count) { id -> PlayerSettings(session, id) }
+                repeat(session.board.preferences.count) { id ->
+                    if (id > 0) HorizontalDivider(color = Hairline)
+                    PlayerSettings(session, id)
+                }
+                Text("Energy above 10 is for decks that can hold extra energy. Counts stop at 9,999.",
+                    fontSize = 13.sp, color = Muted)
             }
             Section("At the table") {
-                SettingsCard {
-                    SwitchRow("Vibrate on taps", "A light tick for each change and a firmer one at the limit.",
-                        session.board.preferences.haptics, true, "haptics") {
-                        session.setHaptics(it)
-                        if (it) feel(HapticFeedbackType.ToggleOn)
-                    }
+                SwitchRow("Vibrate on taps", "A light tick for each change and a firmer one at the limit.",
+                    session.board.preferences.haptics, true, "haptics") {
+                    session.setHaptics(it)
+                    if (it) feel(HapticFeedbackType.ToggleOn)
                 }
             }
         }
@@ -589,76 +668,71 @@ private fun BoxScope.SetupSheet(session: TrackerSession, availableHeight: Dp, fe
         }
         HorizontalDivider(color = Line)
         Button({ session.showSetup(false) }, Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 14.dp).heightIn(min = 48.dp).testTag("done"),
-            shape = RoundedCornerShape(12.dp)) { Text("Done", fontWeight = FontWeight.SemiBold) }
+            shape = RoundedCornerShape(12.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = Ink, contentColor = OnInk)) { Text("Done", fontWeight = FontWeight.SemiBold) }
     }
 }
 
 @Composable
 private fun Section(title: String, content: @Composable ColumnScope.() -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text(title.uppercase(), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.sp, color = Muted,
+        Text(title, fontSize = 14.sp, fontWeight = FontWeight.Medium, color = InkSecondary,
             modifier = Modifier.semantics { heading() })
         content()
     }
 }
 
 @Composable
-private fun SettingsCard(content: @Composable ColumnScope.() -> Unit) {
-    val shape = RoundedCornerShape(16.dp)
-    Column(Modifier.fillMaxWidth().clip(shape).background(Background).border(1.dp, Line, shape).padding(14.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp), content = content)
-}
-
-@Composable
 private fun PlayerSettings(session: TrackerSession, id: Int) {
     val player = session.board.player(id)
     val color = playerColor(player.preference.color)
-    SettingsCard {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.semantics(mergeDescendants = true) { heading() }) {
             Canvas(Modifier.size(12.dp)) { drawSeatMark(id, color) }
-            BasicTextField(player.preference.name, { session.setName(id, it) },
-                Modifier.weight(1f).testTag("name-$id").semantics { contentDescription = "Name for player ${id + 1}" },
-                singleLine = true, cursorBrush = SolidColor(Lime),
-                textStyle = MaterialTheme.typography.bodyLarge.copy(color = Ink),
-                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words, imeAction = ImeAction.Done),
-                decorationBox = { field ->
-                    Box(Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(RoundedCornerShape(10.dp)).background(Field)
-                        .border(1.dp, Line, RoundedCornerShape(10.dp)).padding(horizontal = 12.dp), contentAlignment = Alignment.CenterStart) {
-                        if (player.preference.name.isEmpty()) Text("Player ${id + 1}", color = Muted)
-                        field()
-                    }
-                })
+            Text(player.preference.label, fontSize = 15.sp, fontWeight = FontWeight.Medium, color = Ink)
         }
-        Row(Modifier.fillMaxWidth().semantics { contentDescription = "Colour for ${player.preference.label}" }) {
-            PLAYER_COLORS.forEachIndexed { index, value ->
-                val selected = player.preference.color == value
-                Box(Modifier.weight(1f).height(48.dp).clip(RoundedCornerShape(24.dp)).testTag("color-$id-$index")
-                    .selectable(selected, role = Role.RadioButton) { session.setColor(id, value) }
-                    .semantics { contentDescription = COLOR_NAMES[index] }, contentAlignment = Alignment.Center) {
-                    Box(Modifier.size(32.dp).clip(CircleShape).then(if (selected) Modifier.border(2.dp, Ink, CircleShape).padding(4.dp) else Modifier)
-                        .clip(CircleShape).background(playerColor(value)))
+        // Six 48dp targets in one row when they fit, otherwise two rows of three.
+        BoxWithConstraints(Modifier.fillMaxWidth().semantics { contentDescription = "Colour for ${player.preference.label}" }) {
+            val perRow = if (maxWidth / 6 >= 48.dp) 6 else 3
+            Column {
+                PLAYER_COLORS.chunked(perRow).forEachIndexed { rowIndex, rowColors ->
+                    Row(Modifier.fillMaxWidth()) {
+                        rowColors.forEachIndexed { column, value ->
+                            val index = rowIndex * perRow + column
+                            val selected = player.preference.color == value
+                            Box(Modifier.weight(1f).height(48.dp).clip(RoundedCornerShape(24.dp)).testTag("color-$id-$index")
+                                .selectable(selected, role = Role.RadioButton) { session.setColor(id, value) }
+                                .semantics { contentDescription = COLOR_NAMES[index] }, contentAlignment = Alignment.Center) {
+                                // Every selected swatch: the same ring, the same gap.
+                                Box(Modifier.size(34.dp).clip(CircleShape)
+                                    .border(2.dp, if (selected) Ink else Color.Transparent, CircleShape).padding(4.dp)
+                                    .clip(CircleShape).background(playerColor(value)))
+                            }
+                        }
+                    }
                 }
             }
         }
         SwitchRow("Allow energy above 10",
-            if (player.energy > 10) "Lower energy to 10 before switching off." else "For decks that can hold extra energy.",
+            if (player.energy > 10) "Lower energy to 10 before switching off." else null,
             player.preference.allowAbove10, player.energy <= 10, "limit-$id",
             "Allow energy above 10 for ${player.preference.label}") { session.setLimit(id, it) }
     }
 }
 
 @Composable
-private fun SwitchRow(title: String, detail: String, checked: Boolean, enabled: Boolean, tag: String,
+private fun SwitchRow(title: String, detail: String?, checked: Boolean, enabled: Boolean, tag: String,
     description: String = title, onChange: (Boolean) -> Unit) {
     Row(Modifier.fillMaxWidth().testTag(tag).toggleable(checked, enabled = enabled, role = Role.Switch, onValueChange = onChange)
         .semantics { contentDescription = description }.heightIn(min = 48.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(title, fontSize = 14.sp, color = Ink)
-            Text(detail, fontSize = 12.sp, color = Muted)
+            if (detail != null) Text(detail, fontSize = 13.sp, color = Muted)
         }
         Switch(checked = checked, onCheckedChange = null, enabled = enabled, modifier = Modifier.clearAndSetSemantics {},
-            colors = SwitchDefaults.colors(checkedTrackColor = Lime, checkedThumbColor = Color(0xff10170a),
-                uncheckedTrackColor = Color(0xff2a3136), uncheckedThumbColor = Ink, uncheckedBorderColor = Color(0xff7b878c)))
+            colors = SwitchDefaults.colors(checkedTrackColor = Ink, checkedThumbColor = OnInk, checkedBorderColor = Ink,
+                uncheckedTrackColor = Raised, uncheckedThumbColor = InkSecondary, uncheckedBorderColor = Outline))
     }
 }

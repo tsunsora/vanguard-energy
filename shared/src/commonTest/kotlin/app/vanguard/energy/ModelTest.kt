@@ -137,7 +137,9 @@ class ModelTest {
     @Test fun undoRestoresCountsInOrder() {
         val session = TrackerSession(MemoryStore())
         session.adjust(0, 3); session.adjust(0, 1); session.reset(0)
-        assertEquals("Player 1 reset", session.history.last().label)
+        assertEquals("Reset 4 → 0", session.history.last().label)
+        assertEquals(0, session.history.last().seat)
+        assertEquals("Player 1: Reset 4 to 0", session.history.last().description)
         assertTrue(session.undo()); assertEquals(4, session.board.energies[0])
         assertTrue(session.undo()); assertEquals(3, session.board.energies[0])
         assertTrue(session.undo()); assertEquals(0, session.board.energies[0])

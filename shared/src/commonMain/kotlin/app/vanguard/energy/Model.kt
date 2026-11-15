@@ -18,8 +18,11 @@ data class PlayerPreference(
     val color: String = PLAYER_COLORS[id],
     val allowAbove10: Boolean = false,
 ) {
-    /** A cleared name field still needs a readable label at the table. */
-    val label: String get() = name.trim().ifEmpty { "Player ${id + 1}" }
+    /**
+     * Players are identified by seat, colour and shape; custom names are no longer shown or edited.
+     * [name] stays in storage so older preferences still decode and round-trip unchanged.
+     */
+    val label: String get() = "Player ${id + 1}"
 }
 data class Preferences(
     val count: Int = 2,
@@ -63,8 +66,14 @@ data class Board(val preferences: Preferences = Preferences(), val energies: Lis
         }))
 }
 
-/** One undoable change to the counts, labelled for the Undo button. */
-data class UndoStep(val label: String, val energies: List<Int>)
+/**
+ * One undoable change to the counts. [seat] is null for New game; [label] describes the change
+ * without a player name ("Reset 5 → 0"), because the UI shows the seat by its shape and colour.
+ */
+data class UndoStep(val label: String, val energies: List<Int>, val seat: Int? = null, val reset: Boolean = false) {
+    /** Spoken form, e.g. "Player 2: Reset 5 to 0". */
+    val description: String get() = (if (seat == null) label else "Player ${seat + 1}: $label").replace(" → ", " to ")
+}
 
 /** Only preferences are stored; a fresh process/session always starts all counts at zero. */
 interface PreferenceStore {
@@ -146,26 +155,26 @@ class TrackerSession(private val store: PreferenceStore, preferences: Preference
         private set
     private var migrationPending = false
 
-    private fun update(next: Board, undoLabel: String? = null): Boolean {
+    private fun update(next: Board, undoLabel: String? = null, seat: Int? = null, reset: Boolean = false): Boolean {
         if (next == board) return false
         if (undoLabel != null && next.energies != board.energies)
-            history = (history + UndoStep(undoLabel, board.energies)).takeLast(50)
+            history = (history + UndoStep(undoLabel, board.energies, seat, reset)).takeLast(50)
         val save = next.preferences != board.preferences
         board = next
         if (save) savePreferences()
         return true
     }
-    private fun label(id: Int) = board.player(id.coerceIn(0, 3)).preference.label
     /** Returns whether the count changed; a refused increase at the limit is recorded as a bump. */
     fun adjust(id: Int, delta: Int): Boolean {
         val next = board.adjust(id, delta)
         val change = if (id in 0..3) next.energies[id] - board.energies[id] else 0
-        val changed = update(next, "${label(id)} ${if (change > 0) "+" else "−"}${abs(change)}")
+        val before = if (id in 0..3) board.energies[id] else 0
+        val changed = update(next, "${if (change > 0) "+" else "−"}${abs(change)}: $before → ${before + change}", id)
         if (!changed && delta > 0 && id in 0..3) limitBumps = limitBumps.mapIndexed { i, n -> if (i == id) n + 1 else n }
         return changed
     }
-    fun reset(id: Int) = update(board.reset(id), "${label(id)} reset")
-    fun newGame() { cancelGestures(); update(board.resetAll(), "New game"); menuOpen = false }
+    fun reset(id: Int) = update(board.reset(id), "Reset ${board.energies.getOrElse(id) { 0 }} → 0", id, reset = true)
+    fun newGame() { cancelGestures(); update(board.resetAll(), "New game", reset = true); menuOpen = false }
     fun undo(): Boolean {
         val last = history.lastOrNull() ?: return false
         cancelGestures()

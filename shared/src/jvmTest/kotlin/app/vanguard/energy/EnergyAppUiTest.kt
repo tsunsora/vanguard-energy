@@ -63,31 +63,38 @@ class EnergyAppUiTest {
         capture("3-holding-reset")
         mainClock.advanceTimeBy(400)
         onNodeWithTag("remove-1").performTouchInput { up() }
-        mainClock.autoAdvance = true
         assertEquals("Player 2: 0 energy", energy(1))
+        // Right after a reset, Undo is one tap away beside the hub; it restores and then goes away.
+        mainClock.advanceTimeBy(100)
+        capture("3b-quick-undo")
+        onNodeWithTag("quick-undo").performClick()
+        mainClock.advanceTimeBy(100)
+        assertEquals("Player 2: 5 energy", energy(1))
+        onNodeWithTag("quick-undo").assertDoesNotExist()
+        mainClock.autoAdvance = true
+        onNodeWithTag("remove-1").performTouchInput { click() }
 
         onNodeWithTag("menu").performClick()
         capture("4-menu")
         onNodeWithTag("menu-undo").performClick()
-        assertEquals("Player 2: 5 energy", energy(1))
+        // The board is hidden from accessibility while the menu is open, so read the model here.
+        assertEquals(5, session.board.energies[1])
 
-        onNodeWithTag("menu").performClick()
+        // The menu stays open after Undo, so several steps can be undone in a row.
         onNodeWithTag("menu-new").performClick()
         capture("5-new-game-confirm")
         onNodeWithTag("confirm-new").performClick()
         assertEquals("Player 1: 0 energy", energy(0))
         onNodeWithTag("menu").performClick()
         onNodeWithTag("menu-undo").performClick()
-        assertEquals("Player 1: 6 energy", energy(0))
+        assertEquals(6, session.board.energies[0])
 
-        onNodeWithTag("menu").performClick()
         onNodeWithTag("setup").performClick()
-        onNodeWithTag("name-0").performTextReplacement("Kai")
         onNodeWithTag("color-1-5").performClick()
         capture("6-setup")
         onNodeWithTag("count-4").performClick()
         onNodeWithTag("done").performClick()
-        assertEquals("Kai: 6 energy", energy(0))
+        assertEquals("Player 1: 6 energy", energy(0))
         assertEquals(PLAYER_COLORS[5], session.board.preferences.players[1].color)
 
         onNodeWithTag("charge-2").performClick(); onNodeWithTag("charge-2").performClick()
@@ -113,6 +120,12 @@ class EnergyAppUiTest {
             assert(!counter.overlaps(charge)) { "Player $id counter overlaps charge-$id" }
         }
         capture("9-large-text")
+        onNodeWithTag("menu").performClick()
+        onNodeWithTag("setup").performClick()
+        capture("10-setup-large-text")
+        // Swatches wrap rather than shrink below 48dp.
+        val swatch = onNodeWithTag("color-0-0").fetchSemanticsNode().boundsInRoot
+        assert(swatch.width >= 48f * scale - 1f) { "Swatch is ${swatch.width / scale}dp wide" }
     }
 
     @Test fun keyboardHoldIsCancelledWhenFocusMoves() = runDesktopComposeUiTest(390 * 2, 844 * 2) {

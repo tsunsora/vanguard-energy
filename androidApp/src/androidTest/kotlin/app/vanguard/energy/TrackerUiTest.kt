@@ -83,6 +83,8 @@ class TrackerUiTest {
         ui.onNodeWithTag("energy-0").assertContentDescriptionEquals("Player 1: 0 energy")
         ui.onNodeWithTag("menu").performClick()
         ui.onNodeWithTag("menu-undo").performClick()
+        // The menu stays open after Undo; close it to read the board again.
+        ui.onNodeWithTag("menu").performClick()
         ui.onNodeWithTag("energy-0").assertContentDescriptionEquals("Player 1: 4 energy")
         openSetup()
         if (android.os.Build.VERSION.SDK_INT >= 26) {
